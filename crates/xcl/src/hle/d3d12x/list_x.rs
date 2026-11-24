@@ -2664,8 +2664,8 @@ mod tests {
     fn reset_commits_state_only_after_native_success_and_always_restores_vtable() {
         let mut native = vec![0usize; PC_RESET + 1];
         native[PC_RESET] = reset_test_native as usize;
-        let extended = [native.as_ptr() as usize, 0usize];
-        let ext = unsafe { extended.as_ptr().add(1) as usize };
+        let (_extended, ext) = crate::hle::d3d12x::real::test_ext_table(&native);
+        let ext = ext as usize;
         let replacement = 0x1234_5678usize;
         let mut object = [ext];
         let list = object.as_mut_ptr() as *mut c_void;
@@ -3166,12 +3166,8 @@ mod tests {
         let mut orig_list_vt = [0usize; 70];
         orig_list_vt[PC_RESOLVE_QUERY_DATA] = fake_resolve as usize;
         orig_list_vt[PC_WRITE_BUFFER_IMMEDIATE] = fake_write_immediate as usize;
-        // Adopted objects store `orig` at `ext[-1]`.
-        let ext_list_vt = [orig_list_vt.as_ptr() as usize, 0usize];
-        let mut fake_list = FakeCom {
-            // SAFETY: `ext_list_vt` has 2 elements; `.add(1)` points at `ext[0]` with `ext[-1] = orig`.
-            vt: unsafe { ext_list_vt.as_ptr().add(1) },
-        };
+        let (_ext_list_vt, ext_list) = crate::hle::d3d12x::real::test_ext_table(&orig_list_vt);
+        let mut fake_list = FakeCom { vt: ext_list };
 
         let mut res_vt = [0usize; 16];
         res_vt[11] = fake_gpu_va as usize;
