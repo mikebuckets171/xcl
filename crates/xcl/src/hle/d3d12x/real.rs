@@ -3411,6 +3411,21 @@ unsafe fn shader_bytes<'a>(b: &D3D12_SHADER_BYTECODE) -> Option<&'a [u8]> {
     (p != 0 && n > 0 && crate::gpu::shader::readable(p, n)).then(|| std::slice::from_raw_parts(p as *const u8, n))
 }
 
+/// A shader a PC driver can compile: a DXBC container with a DXBC (`SHDR` / `SHEX`) or DXIL
+/// program, not a console one.
+fn host_shader(blob: &[u8]) -> bool {
+    !crate::gpu::recomp::pso::is_console(blob)
+        && crate::gpu::shader::container_parts(blob).is_some_and(|parts| parts.iter().any(|p| matches!(p.fourcc.as_str(), "SHDR" | "SHEX" | "DXIL")))
+}
+
+/// On a Mac host, a graphics pipeline with a shader no PC driver can compile is refused
+/// before Apple's D3DMetal sees it: D3DMetal does not reject such a shader with
+/// E_INVALIDARG as Windows' D3D12 does, its process ends inside the unwinder instead
+/// (CrossOver 26.3; XCL's test title's console-container PS). The stand-in fallback follows.
+unsafe fn refused_on_mac_host(g: &D3D12_GRAPHICS_PIPELINE_STATE_DESC) -> bool {
+    crate::util::mac_host() && [&g.VS, &g.PS, &g.DS, &g.HS, &g.GS].into_iter().filter_map(|b| shader_bytes(b)).any(|s| !host_shader(s))
+}
+
 /// Root signature of every pipeline built from translated console shaders (static samplers
 /// make it per pipeline): the draw binds it instead of the title's.
 static PSO_RS: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
@@ -3955,8 +3970,13 @@ unsafe fn graphics_pso(this: *mut c_void, desc: *const c_void, riid: *const GUID
         return hr;
     }
     let pc = untranslated_stream_desc(desc, stream);
-    let hr = finish_pso(this, f, pc.as_ref().map_or(desc, |g| g as *const _ as *const c_void), riid, ppv);
-    if hr >= 0 || !crate::gpu::shader::readable(desc as usize, std::mem::size_of::<D3D12_GRAPHICS_PIPELINE_STATE_DESC>()) {
+    let readable = crate::gpu::shader::readable(desc as usize, std::mem::size_of::<D3D12_GRAPHICS_PIPELINE_STATE_DESC>());
+    let hr = if readable && refused_on_mac_host(pc.as_ref().unwrap_or(&*(desc as *const D3D12_GRAPHICS_PIPELINE_STATE_DESC))) {
+        E_INVALIDARG
+    } else {
+        finish_pso(this, f, pc.as_ref().map_or(desc, |g| g as *const _ as *const c_void), riid, ppv)
+    };
+    if hr >= 0 || !readable {
         return hr;
     }
     let d = dummy();
@@ -5268,6 +5288,33 @@ mod standin_tests {
             Some((_, ps)) => assert_eq!(targets(ps), [0, 1], "the DXIL stand-in of mesh pipelines"),
             None => crate::gpu::recomp::runner::skip_test("no DXC"),
         }
+    }
+
+    /// A DXBC container holding one `fourcc` part.
+    fn container(fourcc: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut v = vec![0u8; 36];
+        v[0..4].copy_from_slice(b"DXBC");
+        v[28..32].copy_from_slice(&1u32.to_le_bytes());
+        v[32..36].copy_from_slice(&36u32.to_le_bytes());
+        v.extend_from_slice(fourcc);
+        v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        v.extend_from_slice(data);
+        let total = v.len() as u32;
+        v[24..28].copy_from_slice(&total.to_le_bytes());
+        v
+    }
+
+    /// What a Mac host is not handed: a container without a PC program (the test title's
+    /// console PS: one `XBOX` part of RDNA2 code) or no container at all. The DXBC stand-in is
+    /// a PC program.
+    #[test]
+    fn host_shader_takes_pc_programs_only() {
+        assert!(host_shader(&dummy().ps), "the DXBC stand-in");
+        assert!(host_shader(&dummy().vs), "the DXBC stand-in VS");
+        let rdna2 = [0x01, 0x03, 0x80, 0xbe, 0x01, 0x05, 0x0a, 0x06, 0x00, 0x00, 0x81, 0xbf];
+        assert!(!host_shader(&container(b"XBOX", &rdna2)), "a console container");
+        assert!(!host_shader(&rdna2), "raw RDNA2 code");
+        assert!(!host_shader(&[]), "nothing");
     }
 }
 
