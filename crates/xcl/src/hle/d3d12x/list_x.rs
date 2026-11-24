@@ -3255,13 +3255,10 @@ mod tests {
         orig_vt[42] = fake_noop_uav as usize; // SetGraphicsRootUnorderedAccessView
         orig_vt[43] = fake_set_ib as usize;
 
-        let mut ext_vt = vec![0usize; 65];
-        ext_vt[0] = orig_vt.as_ptr() as usize;
-        ext_vt[1..].copy_from_slice(&orig_vt);
+        let (_ext_vt, ext) = crate::hle::d3d12x::real::test_ext_table(&orig_vt);
 
         let fake = Box::new(FakeDrawList {
-            // SAFETY: `ext_vt` has 65 entries so `.add(1)` points to slot 0 with `orig_vt` at `-1`.
-            vt: unsafe { ext_vt.as_ptr().add(1) },
+            vt: ext,
             refs: AtomicUsize::new(1),
             draws: Mutex::new(Vec::new()),
             index_buffers: Mutex::new(Vec::new()),
@@ -3386,12 +3383,10 @@ mod tests {
 
         let mut orig_vt = [0usize; 64];
         orig_vt[PC_OM_SET_RENDER_TARGETS] = fake_om_set_render_targets as usize;
-        let mut ext_vt = [0usize; 2];
-        ext_vt[0] = orig_vt.as_ptr() as usize;
+        let (_ext_vt, ext) = crate::hle::d3d12x::real::test_ext_table(&orig_vt);
 
         let fake = Box::new(FakeRtList {
-            // SAFETY: `ext_vt` has 2 entries so `.add(1)` has `orig_vt` at `-1` as `real::orig_fn` expects.
-            vt: unsafe { ext_vt.as_ptr().add(1) },
+            vt: ext,
             calls: Mutex::new(Vec::new()),
         });
         let list_ptr = &*fake as *const FakeRtList as *mut c_void;
@@ -3532,13 +3527,10 @@ mod tests {
         orig_vt[PC_RESOURCE_BARRIER] = fake_resource_barrier as usize;
         orig_vt[PC_SET_PREDICATION] = fake_set_predication as usize;
 
-        let mut ext_vt = [0usize; 65];
-        ext_vt[0] = orig_vt.as_ptr() as usize;
-        ext_vt[1..].copy_from_slice(&orig_vt);
+        let (_ext_vt, ext) = crate::hle::d3d12x::real::test_ext_table(&orig_vt);
 
         let fake = Box::new(FakePredList {
-            // SAFETY: `ext_vt` has 65 entries so `.add(1)` points at slot 0 with `orig_vt` at `-1`.
-            vt: unsafe { ext_vt.as_ptr().add(1) },
+            vt: ext,
             ty: Mutex::new(D3D12_COMMAND_LIST_TYPE_DIRECT),
             events: Mutex::new(Vec::new()),
         });
@@ -3723,12 +3715,10 @@ mod tests {
 
             let list_ptr = list.as_raw();
             let orig_vt = *(list_ptr as *const *const usize);
-            let mut ext_vt = [0usize; 65];
-            ext_vt[0] = orig_vt as usize;
-            std::ptr::copy_nonoverlapping(orig_vt, ext_vt.as_mut_ptr().add(1), 64);
+            let (_ext_vt, ext) = crate::hle::d3d12x::real::test_ext_table(std::slice::from_raw_parts(orig_vt, 64));
 
             on_create(list_ptr, alloc.as_raw() as usize, 0, D3D12_COMMAND_LIST_TYPE_DIRECT);
-            *(list_ptr as *mut *const usize) = ext_vt.as_ptr().add(1);
+            *(list_ptr as *mut *const usize) = ext;
 
             let bottom_ts = Box::new(0u64);
             let top_ts = Box::new(0u64);
