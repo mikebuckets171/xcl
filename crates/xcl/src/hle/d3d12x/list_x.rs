@@ -3720,8 +3720,10 @@ mod tests {
             on_create(list_ptr, alloc.as_raw() as usize, 0, D3D12_COMMAND_LIST_TYPE_DIRECT);
             *(list_ptr as *mut *const usize) = ext;
 
-            let bottom_ts = Box::new(0u64);
-            let top_ts = Box::new(0u64);
+            // (a sentinel, not 0: whether the CPU copy happened is told apart from the value it copied)
+            const UNWRITTEN: u64 = u64::MAX;
+            let bottom_ts = Box::new(UNWRITTEN);
+            let top_ts = Box::new(UNWRITTEN);
             let bottom_va = bottom_ts.as_ref() as *const u64 as u64;
             let top_va = top_ts.as_ref() as *const u64 as u64;
 
@@ -3749,14 +3751,19 @@ mod tests {
             cpu_writes_after(q.as_raw(), &[list_ptr]);
 
             let t = Instant::now();
-            while (*(bottom_va as *const AtomicU64)).load(Ordering::Acquire) == 0 || (*(top_va as *const AtomicU64)).load(Ordering::Acquire) == 0 {
-                assert!(t.elapsed().as_secs() < 5, "non-UMA GPU timestamp never landed (top={}, bottom={})", *top_ts, *bottom_ts);
+            while (*(bottom_va as *const AtomicU64)).load(Ordering::Acquire) == UNWRITTEN || (*(top_va as *const AtomicU64)).load(Ordering::Acquire) == UNWRITTEN {
+                assert!(t.elapsed().as_secs() < 5, "non-UMA GPU timestamp never landed (top={:#x}, bottom={:#x})", *top_ts, *bottom_ts);
                 std::thread::yield_now();
+            }
+            on_release(list_ptr as usize);
+            if *top_ts == 0 && *bottom_ts == 0 && crate::util::mac_host() {
+                // D3DMetal (CrossOver 26.3) resolves every timestamp query to 0 (frequency 60 Hz):
+                // the values landed, there is nothing on this host to check them against
+                crate::gpu::recomp::runner::skip_test("the host's timestamp queries read 0 (D3DMetal)");
+                return;
             }
             assert_ne!(*top_ts, 0);
             assert_ne!(*bottom_ts, 0);
-
-            on_release(list_ptr as usize);
         }
     }
 }
