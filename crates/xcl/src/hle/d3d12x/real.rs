@@ -705,6 +705,17 @@ pub unsafe fn orig_fn(this: *mut c_void, slot: usize) -> usize {
     *orig.add(slot)
 }
 
+/// A test's extended table laid out as `orig_fn` reads it: `orig`'s address `HDR` words in front
+/// of the table, then `orig`'s slots. Returns the storage (keep it alive) and the table pointer.
+#[cfg(test)]
+pub(super) fn test_ext_table(orig: &[usize]) -> (Vec<usize>, *const usize) {
+    let mut v = vec![0usize; HDR + orig.len()];
+    v[0] = orig.as_ptr() as usize;
+    v[HDR..].copy_from_slice(orig);
+    let table = unsafe { v.as_ptr().add(HDR) };
+    (v, table)
+}
+
 fn module_of(addr: usize) -> usize {
     use windows_sys::Win32::System::LibraryLoader::{
         GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
@@ -5414,11 +5425,8 @@ mod readback_routing_tests {
         let mut orig_vt = [0usize; 32];
         orig_vt[23] = fake_copy_ranges as usize;
         orig_vt[24] = fake_copy_simple as usize;
-        let ext_vt = [orig_vt.as_ptr() as usize, 0usize];
-        let mut dev = FakeDev {
-            // SAFETY: `ext_vt` has 2 entries; `.add(1)` puts `orig_vt` at `ext[-1]`.
-            vt: unsafe { ext_vt.as_ptr().add(1) },
-        };
+        let (_ext_vt, ext) = test_ext_table(&orig_vt);
+        let mut dev = FakeDev { vt: ext };
         let dev_ptr = &mut dev as *mut FakeDev as *mut c_void;
 
         SIMPLE_TYPES.with(|v| v.borrow_mut().clear());
